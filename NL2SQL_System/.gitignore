@@ -43,6 +43,7 @@ ENV/
 # Logs
 logs/
 *.log
+privacy/.token_store.json
 
 # pytest
 .pytest_cache/

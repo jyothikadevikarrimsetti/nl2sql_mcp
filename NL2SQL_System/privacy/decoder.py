@@ -1,7 +1,8 @@
 import re
 from privacy.config import decrypt_value
-from privacy.encoder import _token_store
+from privacy.encoder import _token_store, get_persisted_token
 from typing import Any, Dict
+from app.services.redis import redis_client
 
 def decode_text(text: str) -> str:
     """
@@ -17,9 +18,17 @@ def decode_text(text: str) -> str:
     # Sort by length descending to avoid partial matching if tokens varied in length
     # (though they are fixed 8-char hashes here)
     for token in set(tokens_found):
-        if token in _token_store:
+        encrypted_val = _token_store.get(token)
+        if not encrypted_val and redis_client.is_connected:
+            encrypted_val = redis_client.get_pii_mapping(token)
+            if encrypted_val:
+                _token_store[token] = encrypted_val
+        if not encrypted_val:
+            encrypted_val = get_persisted_token(token)
+            if encrypted_val:
+                _token_store[token] = encrypted_val
+        if encrypted_val:
             try:
-                encrypted_val = _token_store[token]
                 original_val = decrypt_value(encrypted_val)
                 decoded_text = decoded_text.replace(token, original_val)
             except Exception as e:

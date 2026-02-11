@@ -1,4 +1,6 @@
 """LangChain tool wrappers for MCP tools."""
+from typing import Dict, Any, List
+
 from mcp_tools.summarize_results import summarize_results as mcp_summarize_results
 from mcp_tools.execute_sql import execute_sql as mcp_execute_sql
 from mcp_tools.generate_sql import generate_sql as mcp_generate_sql
@@ -6,13 +8,8 @@ from mcp_tools.get_schema import get_schema as mcp_get_schema
 from mcp_tools.pii_detect import pii_detect as mcp_pii_detect
 from mcp_tools.pii_encode import pii_encode as mcp_pii_encode
 from mcp_tools.pii_decode import pii_decode as mcp_pii_decode
-from typing import Dict, Any, List
 from langchain.tools import tool
 from loguru import logger
-
-# Import MCP tools
-import sys
-sys.path.append('.')
 
 
 @tool

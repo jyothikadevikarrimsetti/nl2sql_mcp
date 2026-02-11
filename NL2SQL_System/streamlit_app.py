@@ -39,26 +39,56 @@ API_BASE_URL = f"http://{API_HOST}:{API_PORT}"
 HISTORY_FILE = os.path.join(os.path.dirname(__file__), "chat_history.json")
 
 
-def load_history() -> List[Dict[str, Any]]:
+def _new_chat(title: str = "New chat") -> Dict[str, Any]:
+    chat_id = f"chat_{int(datetime.utcnow().timestamp())}_{random.randint(1000, 9999)}"
+    return {
+        "id": chat_id,
+        "title": title,
+        "messages": [],
+        "created_at": datetime.utcnow().isoformat()
+    }
+
+
+def load_history() -> Dict[str, Any]:
     """Load persisted chat history from disk."""
     try:
         if os.path.exists(HISTORY_FILE):
             with open(HISTORY_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
+                # Backward compatibility: old format was a list of messages
                 if isinstance(data, list):
+                    chat = _new_chat("Chat 1")
+                    chat["messages"] = data
+                    return {"chats": [chat]}
+                if isinstance(data, dict) and "chats" in data:
                     return data
     except Exception:
         pass
-    return []
+    return {"chats": [_new_chat("Chat 1")]}
 
 
-def save_history(messages: List[Dict[str, Any]]) -> None:
+def save_history(chats: List[Dict[str, Any]]) -> None:
     """Persist chat history to disk (best-effort)."""
     try:
         with open(HISTORY_FILE, "w", encoding="utf-8") as f:
-            json.dump(messages, f)
+            json.dump({"chats": chats}, f)
     except Exception:
         pass
+
+
+def get_active_chat() -> Optional[Dict[str, Any]]:
+    chat_id = st.session_state.get("active_chat_id")
+    if not chat_id:
+        return None
+    for chat in st.session_state.chats:
+        if chat["id"] == chat_id:
+            return chat
+    return None
+
+
+def get_active_messages() -> List[Dict[str, Any]]:
+    chat = get_active_chat()
+    return chat["messages"] if chat else []
 
 
 def get_jwt_token(role: str = "viewer") -> str:
@@ -217,8 +247,10 @@ st.set_page_config(
 # SESSION STATE INITIALIZATION
 # ============================================================================
 
-if "messages" not in st.session_state:
-    st.session_state.messages = load_history()
+if "chats" not in st.session_state:
+    st.session_state.chats = load_history().get("chats", [])
+if "active_chat_id" not in st.session_state:
+    st.session_state.active_chat_id = st.session_state.chats[0]["id"] if st.session_state.chats else None
 
 if "schema" not in st.session_state:
     st.session_state.schema = None
@@ -657,19 +689,22 @@ def render_sidebar() -> None:
 
         # History
         st.markdown("**History**")
-        history_items = [
-            m for m in st.session_state.messages
-            if m.get("role") == "user"
-        ]
-        if history_items:
-            for idx, item in enumerate(reversed(history_items[-20:]), start=1):
-                ts = item.get("ts", "")
-                label = f"{idx}. {item.get('content','')}"
-                if ts:
-                    label = f"{label} ({ts})"
-                st.caption(label)
+        if st.button("➕ New Chat", use_container_width=True):
+            new_chat = _new_chat(f"Chat {len(st.session_state.chats) + 1}")
+            st.session_state.chats.append(new_chat)
+            st.session_state.active_chat_id = new_chat["id"]
+            save_history(st.session_state.chats)
+            st.rerun()
+
+        if st.session_state.chats:
+            for chat in reversed(st.session_state.chats[-20:]):
+                is_active = chat["id"] == st.session_state.active_chat_id
+                label = f"{'➡️ ' if is_active else ''}{chat.get('title','Chat')}"
+                if st.button(label, key=f"chat_{chat['id']}", use_container_width=True):
+                    st.session_state.active_chat_id = chat["id"]
+                    st.rerun()
         else:
-            st.caption("No questions yet.")
+            st.caption("No chats yet.")
 
         st.divider()
 
@@ -730,11 +765,18 @@ def render_sidebar() -> None:
 
         st.divider()
 
-        # Clear chat
-        if st.button("🗑️ Clear Chat", use_container_width=True):
-            st.session_state.messages = []
+        # Delete current chat
+        if st.button("🗑️ Delete Current Chat", use_container_width=True):
+            active_id = st.session_state.active_chat_id
+            st.session_state.chats = [c for c in st.session_state.chats if c["id"] != active_id]
+            if st.session_state.chats:
+                st.session_state.active_chat_id = st.session_state.chats[-1]["id"]
+            else:
+                new_chat = _new_chat("Chat 1")
+                st.session_state.chats = [new_chat]
+                st.session_state.active_chat_id = new_chat["id"]
             st.session_state.debug_events = []
-            save_history(st.session_state.messages)
+            save_history(st.session_state.chats)
             st.rerun()
 
 
@@ -749,8 +791,19 @@ def main():
     # Render sidebar (now contains the app logo/header)
     render_sidebar()
 
+    # Ensure there is an active chat
+    if not st.session_state.active_chat_id and st.session_state.chats:
+        st.session_state.active_chat_id = st.session_state.chats[0]["id"]
+    if not st.session_state.chats:
+        new_chat = _new_chat("Chat 1")
+        st.session_state.chats.append(new_chat)
+        st.session_state.active_chat_id = new_chat["id"]
+
+    active_chat = get_active_chat()
+    active_messages = active_chat["messages"] if active_chat else []
+
     # Conditional Header in Main Area: Only show if chat is empty
-    if not st.session_state.messages:
+    if not active_messages:
         st.markdown('<div class="main-header">💬 NL2SQL Chat</div>',
                     unsafe_allow_html=True)
         st.markdown(
@@ -759,7 +812,7 @@ def main():
         )
 
     # Display chat history
-    for message in st.session_state.messages:
+    for message in active_messages:
         with st.chat_message(message["role"]):
             if message["role"] == "assistant":
                 render_response(
@@ -773,25 +826,25 @@ def main():
 
     # Handle pending user message (needs processing)
     if (
-        st.session_state.messages
-        and st.session_state.messages[-1]["role"] == "user"
-        and not st.session_state.messages[-1].get("handled")
+        active_messages
+        and active_messages[-1]["role"] == "user"
+        and not active_messages[-1].get("handled")
         and not st.session_state.is_processing
     ):
-        user_question = st.session_state.messages[-1]["content"]
+        user_question = active_messages[-1]["content"]
 
         # Check if authenticated
         if not st.session_state.jwt_token:
             with st.chat_message("assistant"):
                 st.warning(
                     "⚠️ Please login first using the sidebar to ask questions.")
-            st.session_state.messages.append({
+            active_messages.append({
                 "role": "assistant",
                 "content": "Please login first using the sidebar to ask questions.",
                 "data": None,
                 "metadata": {}
             })
-            st.session_state.messages[-2]["handled"] = True
+            active_messages[-2]["handled"] = True
             st.rerun()
 
         # Set processing flag
@@ -893,7 +946,7 @@ def main():
             )
 
         # Save assistant message
-        st.session_state.messages.append({
+        active_messages.append({
             "role": "assistant",
             "content": stream_buffer["answer"] or "No response received.",
             "data": stream_buffer["data"],
@@ -902,7 +955,11 @@ def main():
         })
 
         # Mark user message as handled
-        st.session_state.messages[-2]["handled"] = True
+        active_messages[-2]["handled"] = True
+
+        # Set chat title from first user question
+        if active_chat and active_chat.get("title", "").startswith("Chat"):
+            active_chat["title"] = user_question[:60]
 
         # Regenerate insights based on the new context
         if st.session_state.schema:
@@ -916,7 +973,7 @@ def main():
         st.session_state.is_processing = False
 
         # Persist history after assistant response
-        save_history(st.session_state.messages)
+        save_history(st.session_state.chats)
 
         # Rerun to clean up UI
         st.rerun()
@@ -934,20 +991,21 @@ def main():
             for i, suggestion in enumerate(suggestions):
                 with cols[i]:
                     if st.button(suggestion, key=f"suggestion_{i}", use_container_width=True):
-                        st.session_state.messages.append(
-                            {"role": "user", "content": suggestion})
+                        active_messages.append(
+                            {"role": "user", "content": suggestion, "handled": False})
                         st.rerun()
 
     if prompt := st.chat_input(
         "Ask a question about your database...",
         disabled=st.session_state.is_processing
     ):
-        st.session_state.messages.append({
+        active_messages.append({
             "role": "user",
             "content": prompt,
-            "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "handled": False
         })
-        save_history(st.session_state.messages)
+        save_history(st.session_state.chats)
         st.rerun()
 
 

@@ -70,6 +70,30 @@ class RedisService:
         """Remove a token from Redis (logout)."""
         if not self.client:
             return False
+
+    def set_pii_mapping(self, token: str, encrypted_value: str, expiry_seconds: int = 86400) -> bool:
+        """Store PII token -> encrypted value mapping."""
+        if not self.client:
+            logger.warning("Redis not connected, skipping PII mapping storage")
+            return False
+        try:
+            key = f"pii:{token}"
+            self.client.setex(key, expiry_seconds, encrypted_value)
+            return True
+        except Exception as e:
+            logger.error(f"Error storing PII mapping in Redis: {e}")
+            return False
+
+    def get_pii_mapping(self, token: str) -> str:
+        """Retrieve encrypted value for a given PII token."""
+        if not self.client:
+            return None
+        try:
+            key = f"pii:{token}"
+            return self.client.get(key)
+        except Exception as e:
+            logger.error(f"Error retrieving PII mapping from Redis: {e}")
+            return None
             
         try:
             key = f"token:{token}"

@@ -1,9 +1,13 @@
 import hashlib
+import json
+import os
+import threading
 from typing import Dict, List, Tuple, Any
 from privacy.config import encrypt_value
 from presidio_analyzer import AnalyzerEngine, PatternRecognizer, Pattern, RecognizerRegistry
 from presidio_analyzer.nlp_engine import NlpEngineProvider
 from loguru import logger
+from app.services.redis import redis_client
 
 # Global analyzer placeholder for lazy loading
 _analyzer = None
@@ -92,6 +96,39 @@ def _regex_detect_pii(text: str) -> List[Dict[str, Any]]:
 # In-memory store for tokens -> encrypted_values
 # Format: { "TOKEN_HASH": "FERNET_ENCRYPTED_ORIGINAL_VALUE" }
 _token_store: Dict[str, str] = {}
+_PII_TTL_SECONDS = 86400
+_TOKEN_FILE = os.path.join(os.path.dirname(__file__), ".token_store.json")
+_TOKEN_FILE_LOCK = threading.Lock()
+
+
+def _load_token_file() -> Dict[str, str]:
+    if not os.path.exists(_TOKEN_FILE):
+        return {}
+    try:
+        with _TOKEN_FILE_LOCK, open(_TOKEN_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _persist_token(token: str, encrypted_val: str) -> None:
+    """Persist token mapping locally (encrypted values only)."""
+    try:
+        with _TOKEN_FILE_LOCK:
+            data = _load_token_file()
+            data[token] = encrypted_val
+            with open(_TOKEN_FILE, "w", encoding="utf-8") as f:
+                json.dump(data, f)
+    except Exception:
+        # Best-effort persistence
+        pass
+
+
+def get_persisted_token(token: str) -> str:
+    """Retrieve persisted token mapping if available."""
+    data = _load_token_file()
+    return data.get(token)
 
 def detect_pii(text: str) -> List[Dict[str, Any]]:
     """
@@ -150,6 +187,10 @@ def encode_query(text: str) -> Tuple[str, List[Dict]]:
         
         # Store in bridge
         _token_store[token] = encrypted_val
+        if redis_client.is_connected:
+            redis_client.set_pii_mapping(token, encrypted_val, _PII_TTL_SECONDS)
+        else:
+            _persist_token(token, encrypted_val)
         
         # Replace in text
         encoded_text = encoded_text[:start] + token + encoded_text[end:]
@@ -181,6 +222,10 @@ def encode_results(columns: List[str], rows: List[List[Any]]) -> List[List[Any]]
                         token = get_token_hash(val[ent['start']:ent['end']], ent['entity_type'])
                         encrypted_val = encrypt_value(val[ent['start']:ent['end']])
                         _token_store[token] = encrypted_val
+                        if redis_client.is_connected:
+                            redis_client.set_pii_mapping(token, encrypted_val, _PII_TTL_SECONDS)
+                        else:
+                            _persist_token(token, encrypted_val)
                         ev = ev[:ent['start']] + token + ev[ent['end']:]
                     encoded_row.append(ev)
                 else:
