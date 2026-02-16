@@ -1,0 +1,116 @@
+version: '3.8'
+
+services:
+  # MySQL Database Service
+  mysql:
+    image: mysql:8.0
+    container_name: nl2sql_mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD:-rootpassword}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-nl2sql_db}
+      MYSQL_USER: ${MYSQL_USER:-nl2sql_user}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-nl2sql_pass}
+    ports:
+      - "${MYSQL_PORT:-3306}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./data:/docker-entrypoint-initdb.d/data:ro
+    networks:
+      - nl2sql_network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_PASSWORD:-rootpassword}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # Redis Cache Service
+  redis:
+    image: redis:7-alpine
+    container_name: nl2sql_redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - nl2sql_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    command: redis-server --appendonly yes
+
+  # NL2SQL Application (FastAPI + Streamlit)
+  nl2sql_app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: nl2sql_app
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-8001}:8001"    # FastAPI backend
+      - "${STREAMLIT_PORT:-8501}:8501"  # Streamlit frontend
+    environment:
+      # JWT Configuration
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-your-super-secret-key-change-in-prod}
+      
+      # MySQL Database Configuration
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_USER: ${MYSQL_USER:-nl2sql_user}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-nl2sql_pass}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-nl2sql_db}
+      
+      # Azure OpenAI Configuration
+      AZURE_AI_ENDPOINT: ${AZURE_AI_ENDPOINT}
+      AZURE_AI_API_KEY: ${AZURE_AI_API_KEY}
+      AZURE_OPENAI_DEPLOYMENT: ${AZURE_OPENAI_DEPLOYMENT}
+      AZURE_AI_API_VERSION: ${AZURE_AI_API_VERSION:-2024-02-15-preview}
+      
+      # Redis Configuration
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_DB: ${REDIS_DB:-0}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      
+      # Application Configuration
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8001
+      APP_DEBUG: ${APP_DEBUG:-false}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      
+      # CORS Configuration
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-*}
+      CORS_ALLOW_CREDENTIALS: ${CORS_ALLOW_CREDENTIALS:-true}
+      CORS_ALLOW_METHODS: ${CORS_ALLOW_METHODS:-*}
+      CORS_ALLOW_HEADERS: ${CORS_ALLOW_HEADERS:-*}
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data:ro
+      - ./chat_history.json:/app/chat_history.json
+    networks:
+      - nl2sql_network
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+networks:
+  nl2sql_network:
+    driver: bridge
+
+volumes:
+  mysql_data:
+    driver: local
+  redis_data:
+    driver: local

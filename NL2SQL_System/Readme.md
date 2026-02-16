@@ -1,5 +1,7 @@
 # NL2SQL System - Complete Process Flow
 
+> **🐳 Docker Deployment Available!** For the easiest setup using Docker Compose, see **[DOCKER.md](DOCKER.md)** or **[Quick Reference](DOCKER_QUICKREF.md)**
+
 The NL2SQL System is an advanced analytical agent that converts natural language questions into SQL queries and provides intelligent insights. Here's the complete process flow:
 
 ## 1. System Architecture
